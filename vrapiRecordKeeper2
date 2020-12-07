@@ -1,0 +1,158 @@
+// ==UserScript==
+// @name         Vrapi Record Keeper
+// @namespace    http://tampermonkey.net/
+// @version      0.1
+// @description  Log submission data.
+// @author      Andy
+// @include     https://*.hostcompliance.com/*
+// @require     https://ajax.googleapis.com/ajax/libs/jquery/2.2.4/jquery.min.js
+// @require     https://unpkg.com/papaparse@5.0.0/papaparse.min.js
+// @grant       GM_getValue
+// @grant       GM_setValue
+
+// ==/UserScript==
+(function(){
+  const buttonCSS = "box-sizing:border-box;text-align:center;width:33%;min-height:30px;cursor:pointer;border:2px solid black;display:inline-block";
+  const containerCSS = "width:36%;";
+
+  $("body").append(`<div id='vrapi-logger-button-container' style='${containerCSS}'></div>`);
+  $("#vrapi-logger-button-container").append(`<div id='vrapi-logger-record-data' style='${buttonCSS}'>Log Data</div>`);
+  $("#vrapi-logger-button-container").append(`<div id='vrapi-logger-download-data' style='${buttonCSS}'>Download CSV</div>`);
+  $("#vrapi-logger-button-container").append(`<div id='vrapi-logger-delete-data' style='${buttonCSS}'>Clear Records</div>`);
+  const recordButton = document.getElementById('vrapi-logger-record-data');
+  const downloadButton = document.getElementById('vrapi-logger-download-data');
+  const deleteButton = document.getElementById('vrapi-logger-delete-data');
+
+  let alreadyLogged = false;
+  let confirmDelete = false;
+  let storedIndex;
+
+  const changeButtonColor = function(element, border="2px solid black", background="white"){
+    element.style.border = border;
+    element.style.background = background;
+  };
+
+  const retrieveData = function(){
+    let storedData = JSON.parse(GM_getValue("storedSubmittedData", null));
+    if (!Array.isArray(storedData)){
+      storedData = [];
+    }
+    return storedData;
+  };
+
+  const deleteData = function(){
+    if(confirmDelete){
+      alreadyLogged = false;
+      storedIndex = null;
+      changeButtonColor(deleteButton, "2px solid red", "#f39191");
+      GM_setValue("storedSubmittedData", "[]");
+    } else {
+      confirmDelete = true;
+      changeButtonColor(deleteButton, "2px solid pink");
+    }
+  };
+
+  const retrieveDate = function(){
+    let date = new Date();
+    date = new Date(date.getTime() - (date.getTimezoneOffset() * 60 * 1000)).toISOString().substring(0,10);
+    return date;
+  };
+
+  const recordData = function(){
+    let submission = [];
+
+    const date = retrieveDate();
+
+    const taskURL = window.location.href;
+
+    let assignmentId = taskURL.match(/assignmentId=[A-Z0-9]+/);
+    assignmentId = (assignmentId) ? assignmentId[0].split("=")[1] : "";
+
+    let hitId = taskURL.match(/hitId=[A-Z0-9]+/);
+    hitId = (hitId) ? hitId[0].split("=")[1] : "";
+
+    //Retrieve values from inputs and links.
+    const listing = document.querySelector("a.md-no-style.md-button.md-ink-ripple").href;
+    const hostElement = document.querySelector(".md-2-line.md-with-secondary.flex-100 strong");
+    const host = (hostElement) ? hostElement.textContent : "";
+
+    const address = document.querySelector("input[name='identified_formatted_address']").value;
+
+    const unitSelection = document.querySelector("select[name='type_unit_number']").value;
+    const unit = (unitSelection === "2") ? "Yes, but I don't know it" : document.querySelector("input[name='identified_unit_number']").value;
+
+    const parcel = document.querySelector("input[name='identified_parcel_number']").value;
+
+    const lat = document.querySelector("input[name='latitude']").value;
+    const long = document.querySelector("input[name='longitude']").value;
+    const gps = lat + ", " + long;
+
+    const proof = document.querySelector("[name='identified_comments']").value;
+
+    //Retrieve data from the three evidence sections.
+    for (let i = 1; i < 4; i++){
+      const evidenceURL = document.querySelector(`input[name='evidence_url_${i}']`).value;
+      const matchComment = document.querySelector(`input[name='explanation_${i}']`).value;
+      submission.push(evidenceURL, matchComment);
+    }
+
+    submission = [date, listing, address, unit, parcel, gps, proof, ...submission, hitId, assignmentId, host];
+
+    let storedData = retrieveData();
+    //Overwrite submission data if already logged.
+    if (alreadyLogged && storedData[storedIndex]){
+        storedData[storedIndex] = submission;
+    } else {
+        storedData.push(submission);
+        storedIndex = (storedData.length > 5) ? 4 : storedData.length-1;
+        storedData = (storedData.length > 5) ? storedData.splice(storedData.length - 5) : storedData;
+        alreadyLogged = true;
+    }
+    changeButtonColor(recordButton, "2px solid green", "#609948");
+    GM_setValue("storedSubmittedData", JSON.stringify(storedData));
+    console.log(storedData);
+  };
+
+  const downloadCSV = function (){
+    const date = retrieveDate();
+    const storedData = retrieveData();
+    const header = [
+        'Date',
+        'Listing',
+        'Address',
+        'Unit',
+        'Parcel No.',
+        'GPS',
+        'Proof',
+        'Evidence URL 1',
+        'Match Comment 1',
+        'Evidence URL 2',
+        'Match Comment 2',
+        'Evidence URL 3',
+        'Match Comment 3',
+        'Hit Id',
+        'Assignment Id',
+        'Host'
+    ];
+    let csvData = Papa.unparse({
+      fields:header,
+      data:storedData
+    });
+
+    const csv = new Blob([csvData], {type: 'text/csv;charset=utf-8;'});
+    const csvURL = window.URL.createObjectURL(csv);
+
+    const csvElement = document.createElement("a");
+    csvElement.href = csvURL;
+    csvElement.target = "_blank";
+    csvElement.download = `submissionLog-${date}.csv`;
+    csvElement.dispatchEvent(new MouseEvent("click"));
+    window.URL.revokeObjectURL(csv);
+
+    changeButtonColor(downloadButton, "2px solid green", "#609948");
+  };
+
+  recordButton.addEventListener('click', recordData);
+  downloadButton.addEventListener('click', downloadCSV);
+  deleteButton.addEventListener('click', deleteData);
+}());
